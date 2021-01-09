@@ -1,0 +1,261 @@
+---
+title: 'homework v'
+author: 'Sachin Mohan Sujir'
+date: '2020-10-02'
+output: pdf_document
+header-includes:
+  \usepackage{booktabs}
+---
+
+```{r echo=FALSE}
+# This chunk is just to make it possible to shrink the typeface in succeeding chunks. Mainly this will be used for the crosstabs.
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+```
+
+# Introduction
+
+In this document, I will be computing crime data statistics which focuses on yearwise frequency of crimes for every borough. I will then joining the cleaned 311Nyc data and the crime statistics data using join functions and ignoring the irrelevant columns from the final joined data.
+
+# Initialization
+
+Here we load the tidyverse packages and the `data.table` package and load the nyc311 data set. Then we fix the column names of the nyc311 data so that they have no spaces.
+
+```{r initialize}
+library(tidyverse)
+library(data.table)
+nyc311<-fread("311_Service_Requests_from_2010_to_Present.csv", 
+              na.strings = c("","NA","N/A"))
+names(nyc311)<-names(nyc311) %>%
+  stringr::str_replace_all("\\s", ".")
+```
+
+# Data pre-processing
+
+Here we perform data pre-processing steps, by dropping irrelevant columns and removing duplicate rows from the nyc311 dataset.
+
+```{r dataPreProcessing}
+library(xtable)
+options(xtable.comment=FALSE)
+options(xtable.booktabs=TRUE)
+nyc311<-nyc311 %>%
+  select(Agency,
+     Agency.Name,
+     Created.Date,
+     Closed.Date,
+     Incident.Zip,
+     Due.Date,
+     Latitude,
+     Longitude,
+	 Complaint.Type,
+	 Descriptor,
+
+	 Status,
+	 Borough)
+xtable(head(nyc311))
+nyc311 <- distinct(nyc311)
+names(nyc311)
+```
+
+## Handling missing values in 311NYC
+
+In the following snippet, I have handled the missing values and the errornous records in the columns of the data. 
+Intially, I have replaced the invalid zip codes with NA if the zip code length is not 5 or 10 and if the zip code length is 10 then it should satisfy the "xxxxx-xxxx" format.
+Besides, I could find zipcodes like 00000, 10000 which were invalid, hence replaced them with NA. 
+Now considering the closed date column,there were dates that were defaulted to 01/01/1900 and also there were around 100K records with closed date lesser than the created date, which seems to be invalid and hence I replaced them with NA. 
+For borough, there were around 800K records with unspecified values, out of which 600K had valid zip codes, so I found the boroughs for those records using the valid zipcode information and remaining was filled with NA. I could match the zip code that had missing borough and the zip code with the borough specified and filled the missing borough information. 
+
+```{r handleMissingValues}
+# Replacing invalid zipcodes with NA
+nyc311[Incident.Zip=="00000" | (str_length(str_trim(Incident.Zip))<5 | 
+        (str_length(str_trim(Incident.Zip)) > 5 & 
+           str_length(str_trim(Incident.Zip)) < 10)  |                                                                                str_length(str_trim(Incident.Zip)) > 10 ) | 
+          Incident.Zip=="10000","Incident.Zip"] <- NA
+
+nyc311[as.Date(nyc311$Closed.Date, format="%m/%d/%Y")==
+                as.Date("01/01/1900", format="%m/%d/%Y") | 
+                as.Date(nyc311$Closed.Date, format="%m/%d/%Y")<
+                  as.Date(nyc311$Created.Date, format="%m/%d/%Y"), 
+             c("Closed.Date") ] <- NA
+
+unspecifiedBro <- nyc311 %>%
+  select(Incident.Zip, Borough) %>%
+  filter(Borough=="Unspecified" & !is.na(Incident.Zip))
+
+zipCodeTable <- nyc311 %>%
+  select(Incident.Zip, Borough) %>%
+  filter(Borough!="Unspecified" & (str_length(str_trim(Incident.Zip))==5 | 
+   (str_length(str_trim(Incident.Zip))==10 & (str_detect(Incident.Zip,'-')))))
+zipCodeTable <- distinct(zipCodeTable)
+zipCodeTable <-  zipCodeTable %>%
+ group_by(Incident.Zip) %>%
+ summarize(Borough = first(Borough))
+
+joinedTab <- merge(x=unspecifiedBro, y=zipCodeTable, by = "Incident.Zip", all.x = TRUE)
+joinedTab <- distinct(joinedTab)
+colnames(joinedTab)[colnames(joinedTab)=="Borough.x"] <- "Borough"
+
+nyc311 <- merge(x=nyc311, y=joinedTab, 
+                  by=c("Incident.Zip", "Borough"), sort=FALSE, all.x = TRUE)
+nyc311[!is.na(Borough.y), "Borough"] <- nyc311[!is.na(Borough.y), "Borough.y"]
+nyc311[Borough=="Unspecified", "Borough"] <- 
+  nyc311[Borough=="Unspecified", "Borough.y"]
+# drop the borough.y
+nyc311 <- nyc311[,-"Borough.y"]
+```
+
+
+
+# Relatable data set - NYPD NYC Crimes data
+
+## Description
+
+I have used the NYPD NYC crimes data which is a sample of size approx 95K records taken from the original data source.This dataset includes all valid felony, misdemeanor, and violation crimes reported to the New York City Police Department (NYPD). I found this dataset not only relevant to nyc311  but also interesting. 
+
+## Initialization
+
+Here I load the NYC Crimes data set from the link as provided below and I fill the empty cells with NA.
+
+```{r readCrimesData}
+nycCrimes <- 
+  fread("https://raw.githubusercontent.com/jamesjynus/Shiny/master/data/crime.csv", 
+                   na.strings = c("","NA"))
+```
+## Data pre-processing of NYC Crimes data
+
+Here, I removed the irrelevant columns and duplicate records in the data, fixed the column name for borough and I am showing the head and data dictionary.
+
+```{r crimeDataPreProcessing}
+names(nycCrimes)
+library(xtable)
+options(xtable.comment=FALSE)
+options(xtable.booktabs=TRUE)
+nycCrimes<-nycCrimes %>%
+  select(Date,
+         Time,Code,Offense,Status,Type,
+         Boro,Latitude,Longitude,Latitude,
+         Population,Year_Month_New)
+xtable(head(nycCrimes))
+nycCrimes1 <- distinct(nycCrimes)
+colnames(nycCrimes1)[colnames(nycCrimes1)=="Boro"] <- "Borough"
+nycCrimes1 <-  nycCrimes1[str_trim(Offense)!="",]
+names(nycCrimes1)
+head(nycCrimes1)
+```
+
+
+# Computing Crime statistics from NYC Crimes data
+
+In this NYPD NYC Crimes data, there are these following three crime types: Felony, Misdemeanor and Violation.
+In the following snippet, I will be computing the yearwise frequency of crimes for every borough in NYC using group_by function. Then I will unite the crime type and year, forming a new variable named (Type_year) and then spread across that column. The following shows the head of the crime statistics information which will be used for joining with the 311NYC data.
+
+```{r crimesStats}
+boroYear <- nycCrimes1 %>%
+  select( Borough, Year_Month_New, Type) %>%
+  filter(!is.na(Borough))
+yearData <- separate(boroYear, Year_Month_New, into=c("year", "month"), convert = T)
+yearStats <- yearData %>%
+  group_by(Borough, Type, year) %>%
+  summarize(count=n())
+(crimeStats <- yearStats %>%
+  unite("Type_year", Type, year) %>%
+  spread(key=Type_year, value = count))
+```
+
+
+# Joining data and removing irrelevant columns
+
+In the following snippet I have joined the above crime statistics data along with the 311NYC data and dropped the irrelevant columns from them. As our focus would be narrowed down to just complaints and crimes across boroughs during every year, I have ignored other irrelevant information.
+
+```{r joinTables}
+complCrimeData <- inner_join(nyc311, crimeStats, by="Borough")
+names(complCrimeData)
+complCrimeData <- complCrimeData[,c(-1,-6,-7,-8,-9,-11,-12)]
+head(complCrimeData)
+```
+
+# Data Dictionary after joining datasets
+
+*	Borough – town/ district of the NYC provided by submitter (Values: BRONX, BROOKLYN, MANHATTAN, QUEENS, STATEN ISLAND).
+
+*	Created.Date – The date when the service request was created (Type: timestamp (mm/dd/yyyy hh:mm:ss)).
+
+*	Agency – The responding City Government agency (For example: NYPD, DPR,etc.).
+
+*	Agency.Name – The full agency name of responding city government agency (Type: text).
+
+*	Complaint.Type – The type of complaint reported (For example: vending, illegal parking, blocked driveway).
+
+*	FELONY_2006 - Frequency of "FELONY" crime type during 2006.
+
+* FELONY_2007 - Frequency of "FELONY" crime type during 2007.  
+
+* FELONY_2008 - Frequency of "FELONY" crime type during 2008. 
+
+* FELONY_2009 - Frequency of "FELONY" crime type during 2009.
+
+* FELONY_2010 - Frequency of "FELONY" crime type during 2010.
+
+* FELONY_2011 - Frequency of "FELONY" crime type during 2011.
+
+* FELONY_2012 - Frequency of "FELONY" crime type during 2012. 
+
+* FELONY_2013 - Frequency of "FELONY" crime type during 2013.
+
+* FELONY_2014 - Frequency of "FELONY" crime type during 2014. 
+
+* FELONY_2015 - Frequency of "FELONY" crime type during 2015.  
+
+* FELONY_2016 - Frequency of "FELONY" crime type during 2016.
+
+* MISDEMEANOR_2006 - Frequency of "MISDEMEANOR" crime type during 2006.
+
+* MISDEMEANOR_2007 - Frequency of "MISDEMEANOR" crime type during 2007.
+
+* MISDEMEANOR_2008 - Frequency of "MISDEMEANOR" crime type during 2008.
+
+* MISDEMEANOR_2009 - Frequency of "MISDEMEANOR" crime type during 2009.
+
+* MISDEMEANOR_2010 - Frequency of "MISDEMEANOR" crime type during 2010.
+
+* MISDEMEANOR_2011 - Frequency of "MISDEMEANOR" crime type during 2011.
+
+* MISDEMEANOR_2012 - Frequency of "MISDEMEANOR" crime type during 2012.
+
+* MISDEMEANOR_2013 - Frequency of "MISDEMEANOR" crime type during 2013.
+
+* MISDEMEANOR_2014 - Frequency of "MISDEMEANOR" crime type during 2014.
+
+* MISDEMEANOR_2015 - Frequency of "MISDEMEANOR" crime type during 2015.
+
+* MISDEMEANOR_2016 - Frequency of "MISDEMEANOR" crime type during 2016.
+
+* VIOLATION_2006 - Frequency of "VIOLATION" crime type during 2006.
+
+* VIOLATION_2007  - Frequency of "VIOLATION" crime type during 2007.
+
+* VIOLATION_2008  - Frequency of "VIOLATION" crime type during 2008.
+
+* VIOLATION_2009 - Frequency of "VIOLATION" crime type during 2009.
+
+* VIOLATION_2010  - Frequency of "VIOLATION" crime type during 2010.
+
+* VIOLATION_2011  - Frequency of "VIOLATION" crime type during 2011.
+
+* VIOLATION_2012  - Frequency of "VIOLATION" crime type during 2012.
+
+* VIOLATION_2013  - Frequency of "VIOLATION" crime type during 2013.
+
+* VIOLATION_2014  - Frequency of "VIOLATION" crime type during 2014.
+
+* VIOLATION_2015  - Frequency of "VIOLATION" crime type during 2015.
+
+* VIOLATION_2016  - Frequency of "VIOLATION" crime type during 2016.
+
+
+# Conclusion
+
+In this document, I first created data statistics for the cleaned NYPD NYC crime data. Then computed the yearwise frequency of each crime type for every borough. I used this statistics to join with the 311NYC cleaned data and removed irrelevant columns. Finally, I provided the data dictionary of the joined data set.

@@ -1,0 +1,217 @@
+---
+title: "homework ii"
+author: "Sachin Mohan Sujir"
+date: '2020-09-11'
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+header-includes: \usepackage{booktabs}
+---
+
+```{r echo=FALSE}
+# This chunk is just to make it possible to shrink the typeface in succeeding chunks. Mainly this will be used for the crosstabs.
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+```
+
+# Introduction
+311 is a telephone number that is used for non-emergency government services. The dataset consists of more than 9 million records which has data of the service call requests reported in the New York city from the year 2010 to the present year.
+
+# Initialization
+Here we load the tidyverse packages and the `data.table` package and load the nyc311 data set. Then we fix the column names of the nyc311 data so that they have no spaces.
+
+```{r initialize}
+library(tidyverse)
+
+library(data.table)
+# fast for when you are starting out:
+# nyc311<-fread("311_Service_Requests_from_2010_to_Present.csv",nrow=10000)
+# after you get going:
+nyc311<-fread("311_Service_Requests_from_2010_to_Present.csv")
+names(nyc311)<-names(nyc311) %>%
+  stringr::str_replace_all("\\s", ".")
+```
+
+# Data pre-processing
+We perform data pre-processing by dropping irrelevant columns and also removing duplicate rows.
+
+```{r dataPreProcessing}
+names(nyc311)
+nyc311 <- nyc311[,c(-1,-10:-19,-23, -25:-49)]
+names(nyc311)
+nyc311 <- distinct(nyc311)
+dim(nyc311)
+```
+
+# Description
+Here we describe the data, showing both a sample and a data dictionary.
+
+## The head of the table
+Here we produce a table of just some relevant columns of data.
+
+```{r tabulate, results="asis"}
+
+library(xtable)
+options(xtable.comment=FALSE)
+options(xtable.booktabs=TRUE)
+narrow<-nyc311 %>%
+  select(Agency,
+	 Complaint.Type,
+	 Descriptor,
+	 Incident.Zip,
+	 Status,
+	 Borough)
+xtable(head(narrow))
+```
+
+
+## Data Dictionary
+•	Created.Date – The date when the service request was created. (Type: Date and Time)
+•	Closed.Date – The date when the service request was closed by the responding agency. (Type: Data and Time)
+•	Agency – Acronym of responding agency. (Plain Text)
+•	Agency.Name – Full Agency name of responding City Government Agency. (Type: Plain Text)
+•	Complaint.Type – The type of complaint reported (For example: vending, illegal parking, blocked driveway).
+•	Descriptor - Detailed description of the corresponding complaint type. (Type: Plain Text)
+•	Location.Type – The type of location based on the address information. (Plain Text)
+•	Incident.Zip – Zip code of the incident location. (Type: Plain Text)
+•	Status – The status of the service request submitted. (Type: Plain Text)
+•	Due.Date – The date, during when the responding agency is expected to update the service request. (Type: Date and Time)
+•	Resolution.Action.Updated.Date – Date when the responding agency last updated the service request. (Type: Date and Time)
+•	Borough – town/ district of the NYC provided by submitter. (Values: BRONX, BROOKLYN, MANHATTAN, QUEENS, STATEN ISLAND) (Type: Plain Text)
+•	Latitude – Geo-based latitude of the incident location. (Type: Number)
+•	Longitude – Geo-based longitude of the incident location. (Type: Number)
+•	Location – Combination of the geo-based latitude and longitude of the incident location. (Type: location)
+
+```{r}
+names(nyc311)
+```
+
+# Exploration
+Here we explore the columns in the data set.
+
+The following plot shows a horizontal bar chart showing the top agencies that received service call requests along with the count of service call requests for each agency. 
+```{r explore}
+bigAgency <- narrow %>%
+  group_by(Agency) %>%
+  summarize(count=n()) %>%
+  filter(count>1000)
+bigAgency$Agency<-factor(bigAgency$Agency,
+  levels=bigAgency$Agency[order(bigAgency$count)])
+p<-ggplot(bigAgency,aes(x=Agency,y=count)) +
+   geom_bar(stat="identity") +
+   coord_flip() +
+  ggtitle("The number of Complaints received per Agency")
+p
+```
+The following bar chart shows the top 10 complaint types received, with the color specified for each complaint type.
+
+```{r}
+options(scipen = 999)
+topComplaints <- narrow %>%
+  group_by(Complaint.Type) %>%
+  summarize(count=n()) %>%
+  filter(count>100000) %>%
+  top_n(10)
+topComplaints$Complaint.Type<-factor(topComplaints$Complaint.Type,
+  levels=topComplaints$Complaint.Type[order(topComplaints$count)])
+plotA<-ggplot(topComplaints,aes(x=Complaint.Type,y=count, fill=Complaint.Type)) +
+   geom_bar(stat="identity") +
+   coord_flip() + 
+   ggtitle("Complaints per category")
+plotA
+```
+The following shows a coxcomb plot showing the boroughs that received the most service call requests depicted in the form of coxComb.
+```{r}
+boroughs <- narrow %>%
+  group_by(Borough) %>%
+  summarize(count=n())
+boroughs$Borough<-factor(boroughs$Borough,
+  levels=boroughs$Borough[order(boroughs$count)])
+plotB<-ggplot(boroughs,aes(x=Borough,y=count, fill=Borough)) +
+   geom_bar(stat="identity", width=1) +
+   theme(aspect.ratio =1) +
+   coord_polar() +
+   ggtitle("Complaints per borough")
+plotB
+```
+Compaints That NYPD received across each borough
+```{r}
+hpdComplaints <-dplyr::filter(narrow, Agency=='NYPD') 
+hpdComp <- hpdComplaints %>%
+  group_by(Complaint.Type,Borough) %>%
+  summarize(Complaints = length(Complaint.Type))
+ggplot(hpdComp, aes(x=Complaint.Type,y=Complaints, fill=Borough)) + 
+  xlab("Complaint Type") +
+  geom_bar(stat ="identity") +
+  coord_flip() +
+  ggtitle("NYPD Complaints by category")
+```
+
+The table below shows information about the number of open and closed service call requests.
+
+```{r statusPlot}
+statusFrequency <- narrow %>%
+  group_by(Status) %>%
+  summarize(count=n()) %>%
+  filter(Status=="Open" | Status=="Closed")
+statusFrequency$Status<-factor(statusFrequency$Status,
+  levels=statusFrequency$Status[order(statusFrequency$count)])
+statusFrequency
+```
+The bar below shows the percentage complaint type that are open and closed service requests of top 5 complaints. It seems like "Plumbing" has too many open service requests abd "Heating" requets have a good record.
+
+```{r complaintStatus}
+filteredData <- dplyr::filter(narrow, (Complaint.Type=='HEATING' | Complaint.Type=='GENERAL CONSTRUCTION' | Complaint.Type=='PLUMBING' | Complaint.Type=='Street Condition' | Complaint.Type=='Street Light Condition') & (Status=='Open' | Status=='Closed'))
+complaintStatus <- filteredData %>%
+  group_by(Status,Complaint.Type) %>%
+  summarize(count=n())
+plotC<-ggplot(complaintStatus,aes(x=Status,y=count, fill=Complaint.Type)) +
+   geom_bar(stat="identity", position = "fill")
+plotC
+```
+
+Next we include a crosstabulation.
+
+```{r crosstabs, size='footnotesize'}
+xtabA<-dplyr::filter(narrow,
+  Complaint.Type=='HEATING' |
+  Complaint.Type=='GENERAL CONSTRUCTION' |
+  Complaint.Type=='PLUMBING'
+)
+xtabB<-select(xtabA,Borough,"Complaint.Type")
+library(gmodels)
+CrossTable(xtabB$Borough,xtabB$'Complaint.Type')
+```
+
+The above crosstab shows tabulation of every borough with respect to the complaint types- heating, general construction and plumbing, that is it shows the number of complaints received in every borrough for the three specific complaint types and along with chi-square contribution, the percentage of complaints in every borough(N/row total), percentage of each complaint type(N/column total) and percentage of complaints for a specific complaint type and at a specific borough.(N/table total).
+
+
+```{r crosstabsAgency, size='footnotesize'}
+xtabA1<-dplyr::filter(narrow, ( Agency=='HPD' | Agency=='NYPD'))
+xtabB1<-select(xtabA1,Borough, Agency)
+library(gmodels)
+CrossTable(xtabB1$Borough,xtabB1$Agency)
+```
+The above crosstab shows the number of service requests received by HPD and NYPD agencies with respect to each borough.
+```{r geoPlot}
+locationData <-nyc311 %>%
+  select(Agency,
+	 Complaint.Type,
+	 Latitude,
+   Longitude,
+	 Borough) %>%
+  filter(Agency=="HPD" & Borough!="Unspecified")
+ggplot(data = locationData) +
+      geom_point(mapping = aes(x = Longitude, y = Latitude,  color=Borough)) +
+      ggtitle("Geo Plot for HPD Complaints")
+```
+
+# Conclusion
+In this homework, I have gained a good understanding of the 311 NYC service call requests dataset. I have performed data pre-processing steps like removing irrelevant features for easier analysis and removing duplicates, included a data dictionary which I will be working on and explored the various relevant features of the service call requests data and depicted my findings by visualizing them with plots and tabulations. 
+
+

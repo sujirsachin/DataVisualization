@@ -1,0 +1,14 @@
+Discussion Answers
+
+
+1)  I feel this tutorial wouldn't be enough for the next/previous versions of Tableau because there might be fewer or newer features in the older and newer versions respectively. So it depends on the feature upgrade made by the developers. 
+ 
+2) I would characterize these charts based on the different combinations of dimensions and numeric measures. For instance, a pie-chart would require one or more dimensions and a maximum of 2 measures. The recommendations are based on what measures and dimensions we try to visualize. 
+
+3) Yes. Tableau defines measurements in its way. So, if a user wants it in another way Tableau has already done it its way and this might not be everyone's preference. 
+
+4) A tool must be designed in such a way that it should be flexible to future changes in the environment and be robust. If not, users would migrate to other software and tool that support their needs in a better way. So, I shouldn't be blamed but the tool must support the changes.
+
+5) With machine learning on the top of current trends, I think Tableau must have a feature to learn user preference over time. As technology keeps evolving, tools must evolve too. Tableau must store user preference and learn from it using machine learning techniques.
+
+6) Data Visualization is a technique to graphically represent information in the form of graphs, diagrams, charts, etc. It can be used to present data to people who aren't familiar with working with data and to provide real insights for making better business decisions. The term visualization wouldn't have a meaning if pictures aren't included. The real purpose of it wouldn't be served.

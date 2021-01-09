@@ -1,0 +1,791 @@
+---
+title: 'homework vi'
+author: 'Sachin Mohan Sujir'
+date: '2020-10-06'
+output: pdf_document
+toc: true
+number_sections: true
+header-includes:
+  \usepackage{booktabs}
+---
+
+
+```{r echo=FALSE}
+# This chunk is just to make it possible to shrink the typeface in succeeding chunks. Mainly this will be used for the crosstabs.
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+options(warn = -1)
+```
+
+
+# INTRODUCTION
+
+In this report, I will be performing explorations on the following datasets: 311 NYC Service call requests and NYC Crimes data. 311 is a telephone number similar to 911, where people call to access non-emergency government services. The dataset consists of about 9 million records which indicates the service call requests reported in the New York city from the year 2003 to 2015. It contains around 243 complaint types been reported to 311. The relatable dataset which I chose was NYPD NYC crimes data. I took a sample of size 95,593 from the original data source which was around 5.5 million. This data contains three major categories of crime: Felony, Violation and Misdemeanor. Each record corresponds to the crime information being reported in New York city. I will be showing the insights that I got after exploring through these datasets.
+
+
+
+# NYC 311 data
+
+## Initialization
+
+Here I am loading the required packages and load the nyc311 data set. Then I fix the column names of the nyc311 data so that they have no spaces.
+
+```{r initialize}
+library(tidyverse)
+library(data.table)
+library(scales)
+library(ggplot2)
+library(lubridate)
+nyc311<-fread("311_Service_Requests_from_2010_to_Present.csv", 
+              na.strings = c("","NA","N/A"))
+names(nyc311)<-names(nyc311) %>%
+  stringr::str_replace_all("\\s", ".")
+
+```
+
+
+## Data pre-processing
+
+Here I will perform data pre-processing steps by dropping irrelevant columns and removing duplicate rows from the nyc311 dataset.
+
+```{r dataPreProcessing}
+library(xtable)
+options(xtable.comment=FALSE)
+options(xtable.booktabs=TRUE)
+options(xtable.result=axis)
+nyc311<-nyc311 %>%
+  select(Agency,
+     Agency.Name,
+     Created.Date,
+     Closed.Date,
+     Incident.Zip,
+     Due.Date,
+     Latitude,
+     Longitude,
+	   Complaint.Type,
+	   Descriptor,
+	   Status,
+	   Borough)
+xtable(head(nyc311))
+nyc311 <- distinct(nyc311)
+names(nyc311)
+dim(nyc311)
+```
+
+
+### Handling missing values
+
+In the following snippet, I have handled the missing values and the errornous records in the columns of the data. 
+Intially, I have replaced the invalid zip codes with NA if the zip code length is not 5 or 10 and if the zip code length is 10 then it should satisfy the "xxxxx-xxxx" format.
+Besides, I could find zipcodes like 00000, 10000 which were invalid, hence replaced them with NA. 
+Now considering the closed date column,there were dates that were defaulted to 01/01/1900 and also there were around 100K records with closed date lesser than the created date, which seems to be invalid and hence I replaced them with NA. 
+For borough, there were around 800K records with unspecified values, out of which 600K had valid zip codes, so I found the boroughs for those records using the valid zipcode information and remaining was filled with NA. I could match the zip code that had missing borough and the zip code with the borough specified and filled the missing borough information. 
+
+```{r handleMissingValues}
+# Replacing invalid zipcodes with NA
+nyc311[Incident.Zip=="00000" | (str_length(str_trim(Incident.Zip))<5 | 
+        (str_length(str_trim(Incident.Zip)) > 5 & 
+           str_length(str_trim(Incident.Zip)) < 10)  |                                                                                str_length(str_trim(Incident.Zip)) > 10 ) | 
+          Incident.Zip=="10000","Incident.Zip"] <- NA
+
+nyc311[as.Date(nyc311$Closed.Date, format="%m/%d/%Y")==
+                as.Date("01/01/1900", format="%m/%d/%Y") | 
+                as.Date(nyc311$Closed.Date, format="%m/%d/%Y")<
+                  as.Date(nyc311$Created.Date, format="%m/%d/%Y"), 
+             c("Closed.Date") ] <- NA
+
+unspecifiedBro <- nyc311 %>%
+  select(Incident.Zip, Borough) %>%
+  filter(Borough=="Unspecified" & !is.na(Incident.Zip))
+
+zipCodeTable <- nyc311 %>%
+  select(Incident.Zip, Borough) %>%
+  filter(Borough!="Unspecified" & (str_length(str_trim(Incident.Zip))==5 | 
+   (str_length(str_trim(Incident.Zip))==10 & (str_detect(Incident.Zip,'-')))))
+zipCodeTable <- distinct(zipCodeTable)
+zipCodeTable <-  zipCodeTable %>%
+ group_by(Incident.Zip) %>%
+ summarize(Borough = first(Borough))
+joinedTab <- merge(x=unspecifiedBro, y=zipCodeTable, by = "Incident.Zip", all.x = TRUE)
+joinedTab <- distinct(joinedTab)
+colnames(joinedTab)[colnames(joinedTab)=="Borough.x"] <- "Borough"
+
+nyc311 <- merge(x=nyc311, y=joinedTab, 
+                  by=c("Incident.Zip", "Borough"), sort=FALSE, all.x = TRUE)
+nyc311[!is.na(Borough.y), "Borough"] <- nyc311[!is.na(Borough.y), "Borough.y"]
+nyc311[Borough=="Unspecified", "Borough"] <- 
+  nyc311[Borough=="Unspecified", "Borough.y"]
+# drop the borough.y
+nyc311 <- nyc311[,-"Borough.y"]
+head(nyc311)
+
+```
+
+
+## Nyc311 Exploration
+
+The following horizontal bar chart shows the top 10 complaint types received, with the color specified for each complaint type. I can see that the top complaints received in NYC are Heating, Street Condition, Street Light Condition, etc.
+
+```{r topComplaints}
+topComplaints <- nyc311 %>%
+  group_by(Complaint.Type) %>%
+  summarize(count=n()) %>%
+  arrange(desc(count)) %>%
+  top_n(10)
+topComplaints$Complaint.Type<-factor(topComplaints$Complaint.Type,
+  levels=topComplaints$Complaint.Type[order(topComplaints$count)])
+
+(ggplot(topComplaints,aes(x=Complaint.Type,y=count, fill=Complaint.Type)) +
+   geom_bar(stat="identity") +
+   coord_flip() + 
+  scale_y_continuous(breaks = seq(0,700000,by = 200000), labels = comma)+
+    xlab("Complaint Type") + 
+    ylab("Frequency") + 
+   ggtitle("Complaints per Category")+ 
+     theme(plot.title = element_text(hjust = 0.5)))
+
+```
+
+
+The following coxcomb shows the boroughs that received the most service call requests.
+
+```{r boroughsPlot}
+boroughs <- nyc311 %>%
+  filter(!is.na(Borough))%>%
+  group_by(Borough) %>%
+  summarize(count=n())
+boroughs$Borough<-factor(boroughs$Borough,
+  levels=boroughs$Borough[order(boroughs$count)])
+
+(ggplot(boroughs,aes(x=Borough,y=count, fill=Borough)) +
+   geom_bar(stat="identity", width=1) +
+   theme(aspect.ratio = 1) +
+   coord_polar() +
+    ylab("Frequency") +
+   ggtitle("Complaints per Borough") + 
+  theme(plot.title = element_text(hjust = 0.5)))
+
+```
+
+
+The following pie chart shows the top 5 agencies, which recieved the most complaints.
+  
+```{r topAgencies}
+bigAgency <- nyc311 %>%
+  group_by(Agency) %>%
+  summarize(count=n()) %>%
+  arrange(desc(count)) %>%
+  top_n(5)
+
+(ggplot(bigAgency, aes(x="", y=count, fill=Agency)) + 
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) + 
+  geom_text(aes(label = paste0(round(count / sum(count) * 100, 1),"%")),
+position = position_stack(vjust = 0.5)) +
+  labs(x = NULL, y = NULL, fill = NULL, 
+       title = "Complaints received per Agency") +
+  theme_classic() + theme(axis.line = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      plot.title = element_text(hjust = 0.5, color = "#000000")))
+
+```
+
+
+The table information shows the average time taken by the top three agencies. The number of days taken to resolve a complaint are computed using the created date and closed date. From the above, I see that HPD has received the most complaints, so dive deep into exploring the request duration of HPD in resolving the complaints.
+     
+```{r resolutionAgency}
+resolveComplaints <- nyc311 %>%
+  select(Complaint.Type,
+	 Created.Date,
+	 Closed.Date,
+	 Due.Date,
+	 Agency,
+	 Borough)
+filteredData <-dplyr::filter(resolveComplaints, 
+              (!is.na(Closed.Date)))
+numOfDays <- (as.Date(filteredData$Closed.Date, format="%m/%d/%Y")-
+              as.Date(filteredData$Created.Date, format="%m/%d/%Y"))
+
+filteredData <- data.frame(filteredData,numOfDays)
+slowAgency <- filteredData %>%
+  group_by(Agency) %>%
+  summarize(averageTime = as.integer(mean(numOfDays)))
+slowAgency <- slowAgency[order(-slowAgency$averageTime),]
+
+
+topAgencies <- dplyr::filter(slowAgency, Agency=='HPD'|Agency=='DOT'|Agency=='NYPD')
+topAgencies
+hpdComplaints <- dplyr::filter(filteredData, (Agency=="HPD"))
+duration <- as.Date(hpdComplaints$Closed.Date, format="%m/%d/%Y") - 
+  as.Date(hpdComplaints$Created.Date, format="%m/%d/%Y")
+
+(ggplot(hpdComplaints, aes(x=Agency, y=duration)) + 
+         geom_boxplot() + ylim(0,35) + 
+         ylab("Duration") + 
+         ggtitle("HPD Request Duration") + 
+         theme(plot.title = element_text(hjust = 0.5))+
+  coord_flip())
+
+```
+
+
+The following line graph shows the year-wise frequency of complaints accross the boroughs. I can see a similar pattern across all the boroughs with respect to the increase/decrease in frequency over the years. 
+Although, there isn't population statistics for NYC boroughs available here, I researched on that and I see the decreasing order with respect to population numbers are as follows:
+Brooklyn
+Queens
+Manhattan
+Bronx
+Staten Island
+I find the same decreasing order of boroughs with respect to frequency of complaints, with the highest being Brooklyn and the lowest being Staten Island.
+
+```{r BoroughYear}
+boroughYear <-nyc311 %>%
+  select( Borough , Created.Date, Complaint.Type) %>%
+  filter(!is.na(Borough))
+yearData <- separate(boroughYear, Created.Date, into=c("month", "day", "year"), 
+                     convert = T)
+
+boroughYear <- yearData %>%
+  group_by(year, Borough) %>%
+  summarize(frequency=n())
+(yearSpread <- boroughYear %>%
+  spread(key=year, value=frequency))
+
+(ggplot(data=boroughYear, aes(x=year, y=frequency, group=Borough)) + 
+    scale_x_continuous(breaks = seq(2003,2015,by = 2)) +
+    scale_y_continuous(breaks = seq(0,700000,by = 100000),labels = comma)+
+  geom_line(linetype="solid", size=1.2, aes(color = Borough))+
+  geom_point(aes(color = Borough), size=3)+ 
+    xlab("Year")+ 
+    ylab("Frequency of Complaints")+
+    ggtitle("Year-wise frequency of complaints across boroughs")+
+    theme(plot.title = element_text(hjust = 0.5)))
+
+```
+
+
+In the following, I will be showing the year-wise breakdown of the top 5 complaints: general construction, heating, plumbing, street condition, and street light condition.
+
+```{r complaintYear}
+topComplaints <- nyc311 %>%
+  group_by(Complaint.Type) %>%
+  summarize(count=n()) %>%
+  arrange(desc(count))%>%
+  top_n(5)
+  
+
+complaintYear <-nyc311 %>%
+  select( Created.Date, Complaint.Type)
+
+complaintYear <- separate(complaintYear, 
+                Created.Date, into=c("month", "day", "year"), convert = T)
+complaints <- complaintYear %>% 
+    filter(Complaint.Type %in% topComplaints$Complaint.Type) %>%
+  group_by(Complaint.Type,year) %>% 
+  summarize(frequency=n())
+(complSpread <- complaints %>%
+  spread(key=year, value=frequency))
+
+(ggplot(data=complaints, aes(x=year, y=frequency, group=Complaint.Type)) + 
+    scale_x_continuous(breaks = seq(2003,2015,by = 2)) +
+    scale_y_continuous(breaks = seq(0,300000,by = 50000),labels = comma)+
+  geom_line(linetype="solid", size=1.2, aes(color = Complaint.Type))+
+  geom_point(aes(color = Complaint.Type), size=3)+ 
+    xlab("Year")+ 
+    ylab("Frequency of Complaints")+
+    ggtitle("Year-wise frequency of top 5 complaints")+
+    theme(plot.title = element_text(hjust = 0.5)))
+
+```
+
+
+
+# NYPD NYC Crimes data
+
+I have used the NYPD NYC crimes data which is a sample of size approx 95K records taken from the original data source.This dataset includes all valid felony, misdemeanor, and violation crimes reported to the New York City Police Department (NYPD). I found this dataset not only relevant to nyc311  but also interesting. I am taking a sample of around 95K from the original dataset which was around 5.5M (too large).
+
+## Initialization
+
+Here I am loading the Crimes data set from the link as provided below and I filled the empty cells with NA.
+
+```{r initializeCrimesData}
+nycCrimes <- 
+  fread("https://raw.githubusercontent.com/jamesjynus/Shiny/master/data/crime.csv", 
+                   na.strings = c("","NA"))
+```
+
+
+## Data pre-processing
+
+Here, I removed the irrelevant columns and duplicate records in the data, fixed the column names and displaying the head of the crimes data.
+
+```{r crimeDataPreProcessing}
+library(xtable)
+options(xtable.comment=FALSE)
+options(xtable.booktabs=TRUE)
+options(xtable.result=axis)
+nycCrimes<-nycCrimes %>%
+  select(Date,
+     Time,
+     Code,
+     Offense,
+     Status,
+     Type,
+     Boro,
+     Premises,
+	   Latitude,
+	   Longitude,
+	   Population,
+	   Year_Month_New)
+xtable(head(nycCrimes))
+nycCrimes <- distinct(nycCrimes)
+names(nycCrimes)
+dim(nycCrimes)
+
+colnames(nycCrimes)[colnames(nycCrimes)=="Boro"] <- "Borough"
+nycCrimes <-  nycCrimes[str_trim(Offense)!="",]
+head(nycCrimes)
+
+```
+
+
+## NYPD NYC Crimes Exploration
+
+Here, I will be exploring the frequency of the following crime types: Felony, Misdemeanor, Violation. The bar chart also shows the amount of crimes happening with respect to premises like residence, restaurants, etc. depecited using the color for each Premises.
+I can see that misdemeanor which could be petty theft, assault, intoxication, etc. has been majoring compared to other crime types and is frequently found to occur on the streets and residence(premises type).
+
+```{r crimesByType}
+crimesData <- nycCrimes %>%
+  group_by(Type, Premises) %>%
+  summarize(frequency=n()) %>%
+  arrange(desc(frequency))
+
+(ggplot(crimesData, aes(x=reorder(Type,-frequency), y=frequency, fill=Premises, label=frequency)) + 
+    scale_y_continuous(breaks = seq(0,60000, by=10000)) + 
+  geom_bar(stat ="identity") +
+    xlab("Crime Type") +
+    ylab("Frequency") +
+  ggtitle("Crimes by Premises") +
+  geom_text(size = 3, position = position_stack(vjust = 0.5)) +
+  theme(plot.title = element_text(hjust = 0.5)))
+
+```
+
+
+In the following snippet, I will be computing the frequency of crimes across every borough with respect to every crime type, by spreading on the borough column. From the previous section as indicated with respect to the population numbers, Brooklyn being the most populated borough, I also see that it's been majoring in the number of crimes reported compared to other boroughs.
+
+```{r crimesTypeBoro}
+subsetData <- select(nycCrimes, Type, Borough)
+subsetData <- subsetData %>%
+    filter(!is.na(Borough)) %>%
+  group_by(Type,Borough) %>%
+  summarize(count=n()) %>%
+  arrange(desc(count))
+
+boroughSpread <- subsetData %>%
+  spread(key=Borough, value=count)
+boroughSpread[is.na(boroughSpread)] <- 0 
+boroughSpread
+
+(ggplot(subsetData, aes(x=reorder(Type, -count),y=count, fill=Borough, label=count)) + 
+    scale_y_continuous(breaks = seq(0,60000, by=10000)) + 
+  geom_bar(stat ="identity") +
+    xlab("Crime Type") +
+    ylab("Frequency") +
+  ggtitle("Frequency of crimes across boroughs") +
+  geom_text(size = 3, position = position_stack(vjust = 0.5)) + 
+  theme(plot.title = element_text(hjust = 0.5)))
+
+```
+
+
+In the following snippet, I will be showing a table which depicts the year wise frequency of crimes for each borough. I achieved this by using the separate function to extract the year from the created date, and then spread across the year, thus computing the frequency of crimes for each borough.
+The following line graph shows the year-wise trends of crimes across boroughs.
+
+```{r crimesBoroYear}
+boroYear <-nycCrimes %>%
+  select( Borough , Year_Month_New,Type) %>%
+  filter(!is.na(Borough))
+yearData <- separate(boroYear, Year_Month_New, into=c("year", "month"), convert = T)
+
+boroYear <- yearData %>%
+  group_by(year,Borough) %>%
+  summarize(frequency=n())
+
+(yearSpread <- boroYear %>%
+  spread(key=year, value=frequency))
+
+(ggplot(data=boroYear, aes(x=year, y=frequency, group=Borough)) +
+    scale_x_continuous(breaks = seq(2006,2016, by=2)) +
+    scale_y_continuous(breaks= seq(0,3000, by=500)) +
+  geom_line(linetype="solid", size=1.2, aes(color=Borough))+
+  geom_point(aes(color=Borough), size=3) + 
+     ggtitle("Year wise frequency of crimes across boroughs") +
+    xlab("Year") +
+    ylab("Frequency of crimes") + 
+  theme(plot.title = element_text(hjust = 0.5)))
+
+```
+
+
+The following line graph shows the frequency of the three crime types over the years. From the year-wise trend I find that maximum crimes reported for violation was during 2007, for felony was during 2006 and misdemeanor during 2010. I then explored the month-wise breakdown of the crimes for the year which had the maximum occurrence.
+
+```{r crimeTypeYear}
+crimeTypYear <- yearData %>%
+  filter(!is.na(year) & !is.na(Type)) %>%
+  group_by(Type, year) %>%
+  summarize(frequency=n())
+
+(typeSpread <- crimeTypYear %>%
+  spread(key=year, value=frequency))
+
+crimeTyp <- crimeTypYear %>%
+  group_by(Type) %>%
+  summarize(totalCrimes= sum(frequency))
+crimeTypYear <- merge(x=crimeTypYear, y=crimeTyp, by="Type")
+
+(ggplot(data=crimeTypYear, aes(x=year, y=frequency, group=Type)) +
+      scale_x_continuous(breaks = seq(2006,2015, by=2)) +
+      geom_line(linetype="solid", size=1.2, aes(color=Type))+
+      geom_point(aes(color=Type), size=3) + 
+      ggtitle("Year-wise crimes across types") +
+      xlab("Year") +
+      ylab("Frequency of Crimes") + 
+    theme(plot.title = element_text(hjust = 0.5), 
+          legend.position = "top", legend.title = element_blank()))
+
+```
+
+
+```{r crimeMonthStats}
+boroYear <- nycCrimes %>%
+  select( Borough, Year_Month_New, Type) %>%
+  filter(!is.na(Borough))
+yearData <- separate(boroYear, Year_Month_New, into=c("year", "month"), convert = T)
+
+yearStats <- yearData %>%
+  group_by(Borough, Type, year) %>%
+  summarize(count=n())
+
+# Computing crime type
+yearCrime <-yearStats %>%
+  group_by(Type,year) %>%
+  summarize(count = sum(count))
+(maxYearCrime <- yearCrime %>%
+  group_by(Type) %>%
+  summarize(maxCount=max(count),
+            maxYear= year[count==maxCount]))
+
+felonyMonthCrimes <- yearData %>%
+  filter(Type=="FELONY" & 
+         year==maxYearCrime[maxYearCrime$Type=="FELONY","maxYear"]$maxYear) %>%
+   group_by(month) %>%
+  summarize(monthFrequency = n())
+felonyMonthCrimes$month <- month.abb[felonyMonthCrimes$month]
+
+misdeameanorCrimes <- yearData %>%
+  filter(Type=="MISDEMEANOR" & 
+         year==maxYearCrime[maxYearCrime$Type=="MISDEMEANOR","maxYear"]$maxYear) %>%
+   group_by(month) %>%
+  summarize(monthFrequency = n())
+misdeameanorCrimes$month <- month.abb[misdeameanorCrimes$month]
+
+violationCrimes <- yearData %>%
+  filter(Type=="VIOLATION" &
+         year==maxYearCrime[maxYearCrime$Type=="VIOLATION","maxYear"]$maxYear) %>%
+   group_by(month) %>%
+  summarize(monthFrequency = n())
+
+violationCrimes$month <- month.abb[violationCrimes$month]
+
+(ggplot(felonyMonthCrimes,aes(x=month,y=monthFrequency, fill=month)) +
+     geom_bar(stat="identity") +
+      scale_y_continuous(breaks = seq(0,3000,by=50) ) +
+      scale_x_discrete(limits = month.abb) +
+     ggtitle(paste0("Felony crimes during ",
+                    maxYearCrime[maxYearCrime$Type=="FELONY", "maxYear"]$maxYear)) + 
+      geom_text(aes(label=monthFrequency), position=position_dodge(width=0.9), 
+                vjust=-0.25) + guides(colour="none") +
+      ylab("Frequency") +
+      xlab("Month") +
+       theme(plot.title = element_text(hjust = 0.5)))
+
+(ggplot(misdeameanorCrimes,aes(x=month,y=monthFrequency, fill=month)) +
+     geom_bar(stat="identity") +
+      scale_y_continuous(breaks = seq(0,3000,by=50) ) +
+      scale_x_discrete(limits = month.abb) +
+      ggtitle(paste0("Misdemeanor crimes during ",
+                     maxYearCrime[maxYearCrime$Type=="MISDEMEANOR", "maxYear"]$maxYear)) +
+      geom_text(aes(label=monthFrequency), position=position_dodge(width=0.9), 
+                vjust=-0.25) + guides(colour="none") +
+      ylab("Frequency") +
+      xlab("Month") +
+       theme(plot.title = element_text(hjust = 0.5)))
+
+(ggplot(violationCrimes, aes(x=month,y=monthFrequency, fill=month)) +
+     geom_bar(stat="identity") +
+      scale_y_continuous(breaks = seq(0,3000,by=50) ) +
+      scale_x_discrete(limits = month.abb) +
+      ggtitle(paste0("Violation crimes during ",
+                     maxYearCrime[maxYearCrime$Type=="VIOLATION", "maxYear"]$maxYear)) + 
+      geom_text(aes(label=monthFrequency), position=position_dodge(width=0.9), 
+                vjust=-0.25) + guides(colour="none") +
+      ylab("Frequency") +
+      xlab("Month") +
+       theme(plot.title = element_text(hjust = 0.5)))
+
+```
+
+
+## Crime Statistics
+
+In the following snippet, I have made use of the year statistics across boroughs. I used unite function to combine the crime type and year, forming a new variable named (Type_year) and then spreaded across that column. The following shows the head of the crime statistics information which will be used for joining with the 311NYC data.
+
+```{r crimeStats}
+(crimeStats <- yearStats %>%
+  unite("Type_year", Type, year) %>%
+  spread(key=Type_year, value = count))
+
+```
+
+
+
+# Joining NYC311 and NYCCrimes data
+
+I will perform a join on the above crime statistics data and the cleaned 311NYC data using Borough. As our focus would be narrowed down to just complaints and crimes across boroughs over the years, I have ignored other irrelevant information. The following shows the head of the joined data.
+
+```{r joinTables}
+complCrimeData <- inner_join(nyc311, crimeStats, by="Borough")
+complCrimeData <- complCrimeData[,c(-1,-6,-7,-8,-9,-11,-12)]
+head(complCrimeData)
+```
+
+
+## Exploration on joined datasets
+
+The following gives a small overview of the following crime types:
+Violation - The action of breaking regulations especially law, agreement, principles. For example: breaking the traffic rules, illegal parking, smoking in prohibited areas, etc.
+Misdemeanor - This type of crime is a minor wrong doing. For example: theft, drug trafficking, animal abuse, etc.
+Felony - This type of crime involves extreme violence which is considered as more serious than misdemeanor. For example: murder, hit and run accident cases, rape cases, etc.
+
+Now, I will be classifying the complaint types into felony, violation and misdemeanor crimes.
+
+Considering violation, some of the relatable complaints could be illegal parking, smoking and noise complaints. The reason for choosing the above complaints being relevant to violation is because all these complaints are related to breaking the basic rules and regulations.
+The following shows trends across the boroughs for the violation related complaints and violation crimes. 
+
+```{r exploreViolation}
+#Illegal Parking, Smoking, Noise complaints
+
+voilationCompl <- complCrimeData %>%
+  select(Borough, Complaint.Type, Created.Date) %>%
+  filter(Complaint.Type=="Illegal Parking" | 
+           Complaint.Type=="Smoking" | str_starts(Complaint.Type,"Noise"))%>%
+  group_by(Borough, Complaint.Type) %>%
+  summarize(frequency=n())
+
+(complSpread <- voilationCompl %>%
+  spread(key=Complaint.Type, value=frequency))
+
+violationBoro <- complCrimeData %>%
+  select(Borough, c(28:38))
+
+violationBoro <- distinct(violationBoro)%>%
+  gather(key="typeYear",value="frequency", c(2:length(names(violationBoro))))
+
+violationBoro <- violationBoro%>%
+  group_by(Borough)%>%
+  summarize(Violation=sum(frequency))
+
+violationBoro <- merge(violationBoro, complSpread, by="Borough")
+violationGather <- violationBoro %>%
+  gather(key="Violation.Type", value = "frequency", c(2:length(names(violationBoro))))
+
+(ggplot(data=violationGather, aes(x=Borough, y=frequency, group=Violation.Type)) +
+      geom_line(linetype="solid", size=1.2, aes(color=Violation.Type))+
+      geom_point(aes(color=Violation.Type), size=3) + 
+      ggtitle("Comparison of Violation crimes with violation-related complaints") +
+      xlab("Borough") +
+      ylab("Frequency") + 
+    theme(plot.title = element_text(hjust = 0.5), 
+          legend.position = "top", legend.title = element_blank()))
+
+```
+
+
+Considering felony, some of the relatable complaints could be blocked driveway, traffic, street condition and street light condition. The reason for choosing the above complaints being relevant to felony is that there are could be accidents due to improper street conditions, heavy traffic that also caused blocked driveway. Even murders can occur on the street which may lead to traffic and blocked driveway. Assuming these criteria, I can find high correlation between felony and the above mentioned complaints.
+The following shows trends across the boroughs for the felony related complaints and felony crimes. 
+
+```{r exploreFelony}
+# Blocked Driveway, Traffic, Street Condition, Street Light Condition
+
+felonyCompl <- complCrimeData %>%
+  select(Borough, Complaint.Type) %>%
+  filter(Complaint.Type=="Blocked Driveway" | 
+           Complaint.Type=="Traffic" | Complaint.Type=="Street Condition" | 
+           Complaint.Type=="Street Light Condition")%>%
+  group_by(Borough, Complaint.Type) %>%
+  summarize(frequency=n())
+
+(complSpread <- felonyCompl %>%
+  spread(key=Complaint.Type, value=frequency))
+
+felonyBoro <- complCrimeData %>%
+  select(Borough, c(6:16))
+felonyBoro <- distinct(felonyBoro)%>%
+  gather(key="typeYear",value="frequency", c(2:length(names(felonyBoro))))
+
+felonyBoro <- felonyBoro%>%
+  group_by(Borough)%>%
+  summarize(Felony=sum(frequency))
+
+felonyBoro <- merge(felonyBoro, complSpread, by="Borough")
+
+felonyGather <- felonyBoro %>%
+  gather(key="Felony.Type", value = "frequency", c(2:length(names(felonyBoro))))
+
+(ggplot(data=felonyGather, aes(x=Borough, y=frequency, group=Felony.Type)) +
+      geom_line(linetype="solid", size=1.2, aes(color=Felony.Type))+
+      geom_point(aes(color=Felony.Type), size=3) + 
+      ggtitle("Comparison of Felony crimes with felony-related complaints") +
+      xlab("Borough") +
+      ylab("Frequency") +
+    theme(plot.title = element_text(hjust = 0.5), 
+          legend.position = "top", legend.title = element_blank()))
+
+```
+
+
+Considering misdemeanor, some of the relatable complaints could be lost property(theft), graffiti and animal abuse. The reason for choosing the above complaints being relevant to misdemeanor is because these complaints are consider as minor wrong doings and doesn't cause any fatal outcomes.
+The following shows trends across the boroughs for the misdemeanor related complaints and misdemeanor crimes. 
+
+```{r exploreMisdemeanor}
+# Graffitti, Animal abuse
+
+misdemeanorCompl <- complCrimeData %>%
+  select(Borough, Complaint.Type, Created.Date) %>%
+  filter(Complaint.Type=="Graffiti" |  Complaint.Type=="Animal Abuse")%>%
+  group_by(Borough, Complaint.Type) %>%
+  summarize(frequency=n())
+
+(complSpread <- misdemeanorCompl %>%
+  spread(key=Complaint.Type, value=frequency))
+
+misdemeanorBoro <- complCrimeData %>%
+  select(Borough, c(17:27))
+
+misdemeanorBoro <- distinct(misdemeanorBoro)%>%
+  gather(key="typeYear",value="frequency", c(2:length(names(misdemeanorBoro))))
+
+misdemeanorBoro <- misdemeanorBoro%>%
+  group_by(Borough)%>%
+  summarize(Misdemeanor=sum(frequency))
+
+misdemeanorBoro <- merge(misdemeanorBoro, complSpread, by="Borough")
+misdemeanorGather <- misdemeanorBoro %>%
+  gather(key="Misdemeanor.Type", value = "frequency", 
+         c(2:length(names(misdemeanorBoro))))
+
+(ggplot(data=misdemeanorGather, aes(x=Borough, y=frequency, group=Misdemeanor.Type)) +
+      geom_line(linetype="solid", size=1.2, aes(color=Misdemeanor.Type)) +
+      geom_point(aes(color=Misdemeanor.Type), size=3) +
+      geom_text(aes(label=frequency), hjust=0, vjust=0) +
+      ggtitle("Comparison of Misdeameanor crimes with Misdemeanor-related complaints") +
+      xlab("Borough") +
+      ylab("Frequency of Misdemeanor related") + 
+    theme(plot.title = element_text(hjust = 0.5), 
+          legend.position = "top", legend.title = element_blank()))
+```
+
+
+
+# CONCLUSION
+
+In this document, I have explored both the NYC 311 data and the NYPD NYC Crimes data by showing various visualization graphs. I am joining them using borough as a common column and continued to explore the connections between them. I depicted the correlations between the 311 complaints and crime types with sound reasoning of why I found them relevant.
+
+
+
+# APPENDIX
+
+## Data dictionary of joined data
+
+•	Borough – town/ district of the NYC provided by submitter (Values: BRONX, BROOKLYN, MANHATTAN, QUEENS, STATEN ISLAND).
+
+•	Created.Date – The date when the service request was created (Type: timestamp (mm/dd/yyyy hh:mm:ss)).
+
+•	Agency – The responding City Government agency (For example: NYPD, DPR,etc.).
+
+•	Agency.Name – The full agency name of responding city government agency (Type: text).
+
+•	Complaint.Type – The type of complaint reported (For example: vending, illegal parking, blocked driveway).
+
+•	FELONY_2006 - Frequency of "FELONY" crime type during 2006.
+
+• FELONY_2007 - Frequency of "FELONY" crime type during 2007.  
+
+• FELONY_2008 - Frequency of "FELONY" crime type during 2008. 
+
+• FELONY_2009 - Frequency of "FELONY" crime type during 2009.
+
+• FELONY_2010 - Frequency of "FELONY" crime type during 2010.
+
+• FELONY_2011 - Frequency of "FELONY" crime type during 2011.
+
+• FELONY_2012 - Frequency of "FELONY" crime type during 2012. 
+
+• FELONY_2013 - Frequency of "FELONY" crime type during 2013.
+
+• FELONY_2014 - Frequency of "FELONY" crime type during 2014. 
+
+• FELONY_2015 - Frequency of "FELONY" crime type during 2015.  
+
+• FELONY_2016 - Frequency of "FELONY" crime type during 2016.
+
+• MISDEMEANOR_2006 - Frequency of "MISDEMEANOR" crime type during 2006.
+
+• MISDEMEANOR_2007 - Frequency of "MISDEMEANOR" crime type during 2007.
+
+• MISDEMEANOR_2008 - Frequency of "MISDEMEANOR" crime type during 2008.
+
+• MISDEMEANOR_2009 - Frequency of "MISDEMEANOR" crime type during 2009.
+
+• MISDEMEANOR_2010 - Frequency of "MISDEMEANOR" crime type during 2010.
+
+• MISDEMEANOR_2011 - Frequency of "MISDEMEANOR" crime type during 2011.
+
+• MISDEMEANOR_2012 - Frequency of "MISDEMEANOR" crime type during 2012.
+
+• MISDEMEANOR_2013 - Frequency of "MISDEMEANOR" crime type during 2013.
+
+• MISDEMEANOR_2014 - Frequency of "MISDEMEANOR" crime type during 2014.
+
+• MISDEMEANOR_2015 - Frequency of "MISDEMEANOR" crime type during 2015.
+
+• MISDEMEANOR_2016 - Frequency of "MISDEMEANOR" crime type during 2016.
+
+• VIOLATION_2006 - Frequency of "VIOLATION" crime type during 2006.
+
+• VIOLATION_2007  - Frequency of "VIOLATION" crime type during 2007.
+
+• VIOLATION_2008  - Frequency of "VIOLATION" crime type during 2008.
+
+• VIOLATION_2009 - Frequency of "VIOLATION" crime type during 2009.
+
+• VIOLATION_2010  - Frequency of "VIOLATION" crime type during 2010.
+
+• VIOLATION_2011  - Frequency of "VIOLATION" crime type during 2011.
+
+• VIOLATION_2012  - Frequency of "VIOLATION" crime type during 2012.
+
+• VIOLATION_2013  - Frequency of "VIOLATION" crime type during 2013.
+
+• VIOLATION_2014  - Frequency of "VIOLATION" crime type during 2014.
+
+• VIOLATION_2015  - Frequency of "VIOLATION" crime type during 2015.
+
+• VIOLATION_2016  - Frequency of "VIOLATION" crime type during 2016.
+
+
