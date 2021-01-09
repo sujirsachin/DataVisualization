@@ -1,0 +1,319 @@
+---
+title: 'H-1B Applications Data Exploration'
+author: 'Sachin Mohan Sujir'
+date: '2020-10-07'
+output: pdf_document
+toc: true
+number_sections: true
+header-includes:
+  \usepackage{booktabs}
+---
+
+```{r echo=FALSE}
+# This chunk is just to make it possible to shrink the typeface in succeeding chunks. Mainly this will be used for the crosstabs.
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+options(warn = -1)
+```
+
+
+# INTRODUCTION
+
+In this report, I have performed an exploration of the H1B application data. The dataset size is around 528K, where each record contains information about the visa application filed by the employer for non-immigrant workers. In the data, there are about four types of VISA (H1B, E3 Australian, H1B1 Singapore, and H1B1 Chile) filed during the years from 2011 to 2017. H-1B visas are work authorization visas required by internationals to work in the USA (temporarily).
+
+
+# INITIALIZATION 
+
+Here, the required packages and the H1B dataset is loaded and have replaced the empty cells with an NA. Pander is designed to provide a minimal and easy tool for rendering R objects into Pandoc’s markdown
+
+```{r initialize}
+library(tidyverse)
+library(data.table)
+library(pander)
+library(scales)
+library(ggplot2)
+library(xtable)
+h1bData <- fread("h1bdata.csv", na.strings = c("","NA","N/A"))
+```
+
+
+# DATA PRE-PROCESSING
+
+Here, I have performed a few data pre-processing steps by selecting only required/relevant columns and removing duplicates from the dataset. Following shows the relevant column names and head of the dataset.
+
+```{r dataPreprocessing}
+names(h1bData)
+options(xtable.comment=FALSE)
+options(xtable.booktabs=TRUE)
+options(xtable.result=axis)
+h1bData<-h1bData %>%
+  select(CASE_SUBMITTED_DAY,
+         CASE_SUBMITTED_MONTH,
+         CASE_SUBMITTED_YEAR,
+         DECISION_DAY,
+         DECISION_MONTH,   
+         DECISION_YEAR,   
+         VISA_CLASS,
+         EMPLOYER_NAME, 
+         SOC_NAME,         
+         TOTAL_WORKERS,   
+         FULL_TIME_POSITION,
+         PREVAILING_WAGE,
+         PW_UNIT_OF_PAY,   
+         WAGE_RATE_OF_PAY_FROM,   
+         WAGE_RATE_OF_PAY_TO, 
+         WAGE_UNIT_OF_PAY,   
+         'H-1B_DEPENDENT',   
+         WILLFUL_VIOLATOR,   
+         WORKSITE_STATE, 
+         CASE_STATUS)
+
+h1bData <- distinct(h1bData)
+dim(h1bData)
+names(h1bData)
+pander(head(h1bData))
+```
+
+
+# EXPLORATION
+
+Initially, I have explored the frequency of applications per VISA category. 
+From the below bar graph, it looks like more than 95% of the applications were for H1B visa category with approximately 44K records that belong to the category.
+
+```{r visaByCategory}
+visaCategory <- h1bData %>%
+  group_by(VISA_CLASS) %>%
+  summarize(frequency=n())
+(ggplot(visaCategory,aes(x=reorder(VISA_CLASS,-frequency), 
+                         y=frequency, fill=VISA_CLASS)) +
+   geom_bar(stat="identity") +
+    scale_y_continuous(breaks = seq(0,500000,by = 100000), labels = comma) + 
+    geom_text(aes(label=frequency), position=position_dodge(width=0.9), 
+              vjust=-0.25) + 
+    xlab("VISA Category") + 
+    ylab("Frequency") + 
+   ggtitle("Number of applications per VISA Category")+ 
+     theme(plot.title = element_text(hjust = 0.5)))
+
+```
+
+
+## H1B Visa exploration
+
+The following shows the top 15 states that had the most H1B applicants. Looks like California had the maximum number of applicants. California is one of the hubs that provide a lot of employment to internationals. It is not a wonder that it is on the top of the list.
+
+Following the horizontal bar graph, the table shows the frequency of applications across the years (2011 to 2017) in the top 15 states. It is clear that the number of applications filed has increased over the years and California has the maximum number of applicants compared to all the states. The increase in number is drastic and it has been increasing over the years.
+
+```{r h1bByState}
+h1bAppln <- h1bData %>%
+  filter(VISA_CLASS=="H1B")
+
+h1bTopState <- h1bAppln %>%
+  group_by(WORKSITE_STATE) %>%
+  summarize(frequency= n()) %>%
+  arrange(desc(frequency)) %>%
+  top_n(15)
+
+(ggplot(h1bTopState,aes(x=reorder(WORKSITE_STATE, frequency), 
+                        y=frequency, fill=WORKSITE_STATE)) +
+   geom_bar(stat="identity") +
+    
+    coord_flip() +
+    xlab("State") + 
+    ylab("Frequency of applications") + 
+   ggtitle("Top 15 states of H1B applicants")+ 
+     theme(plot.title = element_text(hjust = 0.5)))
+
+h1bTopYear <- h1bAppln %>%
+  filter(WORKSITE_STATE %in% h1bTopState$WORKSITE_STATE) %>%
+  group_by(WORKSITE_STATE, CASE_SUBMITTED_YEAR) %>%
+  summarize(frequency=n())
+
+
+# Year-wise spread of h1b application with respect to top 15 states
+h1bYearSpread <- h1bTopYear %>%
+  spread(key=CASE_SUBMITTED_YEAR, value = frequency)
+colnames(h1bYearSpread)[1] <- "STATE"
+h1bYearSpread[is.na(h1bYearSpread)] <- 0
+h1bYearSpread
+```
+
+Now, I am determining the decision status of the applications across the top states. From the vertically stacked bar graph, looks like all the states have more certified cases compared to other decision statuses. After this, I have also determined the acceptance rate of the H1B applications for states, shown in the form of a table. The maximum acceptance rate is for NY state which is around 89.8%. But almost all the top states have an acceptance rate on an average of around 88.5%. 
+
+Even though California has the most number of H1B applications, NY has a better acceptance rate than California.
+
+```{r h1bStateByStatus}
+
+# decision with respect to top 15 states
+h1bStatus <- h1bAppln %>%
+  filter(WORKSITE_STATE %in% h1bTopState$WORKSITE_STATE) %>%
+  group_by(WORKSITE_STATE, CASE_STATUS) %>%
+  summarize(frequency=n())
+
+
+(ggplot(h1bStatus, aes(x=reorder(WORKSITE_STATE, -frequency), 
+                     y=frequency, fill=CASE_STATUS, label=frequency)) + 
+  geom_bar(stat ="identity") +
+
+    xlab("STATE") +
+    ylab("Frequency") +
+  ggtitle("Status of H1B applications of top 15 states") +
+  theme(plot.title = element_text(hjust = 0.5)))
+
+# Certified acceptance rate for the top 15 states
+
+h1bStateCertified <- h1bAppln %>%
+  filter(WORKSITE_STATE %in% h1bTopState$WORKSITE_STATE & 
+           CASE_STATUS=="CERTIFIED") %>%
+  group_by(WORKSITE_STATE) %>%
+  summarize(certifiedCases = n())
+
+h1bCertifiedRate <- merge(h1bTopState, h1bStateCertified, by="WORKSITE_STATE")
+h1bCertifiedRate$acceptanceRate <- 
+  h1bCertifiedRate$certifiedCases/h1bCertifiedRate$frequency
+h1bCertifiedRate
+
+```
+
+
+Next look into job positions- initially, I have determined the top five job titles. Looks like more than 200K applications are requested for Computer occupation jobs and the top five jobs are Computer occupation, analysts, engineers, scientists, and doctors.  
+
+Now, let's explore how many of these top job positions are requested in the top 15 states. The line graph shows the applicants across the states specific to the top 5 job titles. California, being the top state, has the maximum number of applications with respect to all the job titles as depicted. California and NY are IT hubs in the USA and it is clear that the most number of applications are in California and the most number of applications accepted is in NY and it is also clear from the visualization that California and NY top in Computer occupation jobs. Also, the topmost job title which is Computer Occupation has been leading with respect to all the states, thus showing that computer occupation has the highest demand for all other job titles.
+
+```{r h1bByPositionType}
+# top job positions
+h1bTopPositions <- h1bAppln %>%
+  group_by(SOC_NAME) %>%
+  summarize(frequency=n()) %>%
+  arrange(desc(frequency)) %>%
+  top_n(5)
+
+(ggplot(h1bTopPositions, aes(x=reorder(SOC_NAME, frequency), 
+                         y=frequency, fill=SOC_NAME)) +
+   geom_bar(stat="identity") +
+    coord_flip() +
+    xlab("Top job positions requested for H1B") + 
+    ylab("Frequency") + 
+   ggtitle("Top job positions of H1B applications") + 
+     theme(plot.title = element_text(hjust = 0.5)))
+
+
+# Exploring the trends in frequency of the top 5 job titles across the top 15 states
+
+h1bStatePosition <- h1bAppln %>%
+  filter(SOC_NAME %in% h1bTopPositions$SOC_NAME & 
+           WORKSITE_STATE %in% h1bTopState$WORKSITE_STATE) %>%
+  group_by(WORKSITE_STATE,SOC_NAME) %>%
+  summarize(frequency = n())
+
+
+h1bJobSpread <- h1bStatePosition %>%
+  spread(key=WORKSITE_STATE, value=frequency)
+h1bJobSpread
+
+
+(ggplot(data=h1bStatePosition, aes(x=WORKSITE_STATE, y=frequency, group=SOC_NAME)) +
+      geom_line(linetype="solid", size=1.2, aes(color=SOC_NAME)) +
+      geom_point(aes(color=SOC_NAME), size=3) +
+      ggtitle("Trends in top job titles across the top 15 states") +
+      xlab("State") +
+      ylab("Number of applications") + 
+    theme(plot.title = element_text(hjust = 0.5), 
+          legend.position = "top", legend.title = element_blank()))
+
+```
+
+
+Now, I am exploring the yearly starting salary(wage) of the majoring job titles. The following histogram shows the applicants falling into each of the wage ranges from the lowest to highest wage, across the job titles as depicted by the vertically stacked histogram. 
+
+Following that, as salary depends on the state, I have determined the average salary for each of the top job titles across the 15 states. This will give us an idea about the average salary provided by the employers for these jobs with respect to states. Looks like California and Washington has the maximum average salary across all the job titles. The reason for such a pattern could be because the cost of living is expensive in California and Washington. As a resident of NY, we know that the cost of living and the taxes are a little high (and from the graph) but seem like it is not as high as California and Washington.
+
+```{r wageRangeTopPosition}
+# wageRange of top positions
+
+h1bTopPosAppl <- h1bAppln %>%
+  filter(SOC_NAME %in% h1bTopPositions$SOC_NAME & WAGE_UNIT_OF_PAY=="Year")
+
+(ggplot(data=h1bTopPosAppl, aes(x=WAGE_RATE_OF_PAY_FROM)) + 
+  geom_histogram(aes(fill=SOC_NAME), breaks=seq(10000, 500000, by=50000)) + 
+    scale_x_continuous(breaks = seq(10000, 500000, by=70000)) +
+  ggtitle("Wage Range of the top position titles") +
+  xlab("Wage Range") +
+  ylab("Frequency") +
+  guides(fill=guide_legend(title="Occupation Name"))+
+  theme(plot.title = element_text(hjust = 0.5)))
+
+
+
+# Average yearly starting salary in the top states with respect to top positions
+h1bStateAvgSalary <-h1bAppln %>%
+                  filter(WAGE_UNIT_OF_PAY=="Year" & 
+                       SOC_NAME %in% h1bTopPositions$SOC_NAME & 
+                       WORKSITE_STATE %in% h1bTopState$WORKSITE_STATE) %>%
+                  group_by(WORKSITE_STATE,SOC_NAME) %>%
+                  summarize(`Average Salary` = mean(WAGE_RATE_OF_PAY_FROM))
+
+# plot with state and average salary with respect to job title
+(ggplot(data=h1bStateAvgSalary, aes(x=WORKSITE_STATE, y=`Average Salary`, group=SOC_NAME)) 
+  + geom_line(linetype="solid", size=1.2, aes(color=SOC_NAME)) +
+      ggtitle("Average salary across the states for top positions") +
+      xlab("State") +
+      ylab("Average salary") + 
+    scale_y_continuous(labels = comma) +
+    theme(plot.title = element_text(hjust = 0.5), legend.title = element_blank()))
+
+```
+
+
+Having explored the average salary, now I am exploring the average prevailing(current) wage for the top 5 jobs(analysts, computer occupation, doctors, scientists, and engineers). Looks like analysts and computer occupations have almost the similar average prevailing wage. This gives us an idea of what is the current average salary for the top job positions. This graph can also help students to get an idea of their market value and think wisely when negotiation salary when they get a job offer.
+
+```{r prevailingWageAverage}
+# prevailing wage for top jobs
+h1bPrevailingWage <- h1bAppln %>%
+  filter(WAGE_UNIT_OF_PAY=="Year" & SOC_NAME %in% h1bTopPositions$SOC_NAME) %>%
+  group_by(SOC_NAME) %>%
+  summarize(`Average Prevailing wage`=mean(PREVAILING_WAGE))
+
+(ggplot(h1bPrevailingWage, aes(x=reorder(SOC_NAME,`Average Prevailing wage`), 
+                         y=`Average Prevailing wage`, fill=SOC_NAME)) +
+   geom_bar(stat="identity") +
+    xlab("Occupation Name") + 
+    coord_flip() +
+   ggtitle("Average prevailing wage of top 5 job titles")+ 
+     theme(plot.title = element_text(hjust = 0.3)))
+
+```
+
+
+Having explored the wages, now let's find the top 10 employers who have filed H1B for computer programmers and analysts(being the top 2 jobs). This gives us an idea of the top employers sponsoring H1B with a breakdown of both analysts and computer occupation. Looks like, Infosys is majoring in sponsoring computer occupation and Accenture is majoring in sponsoring analysts.
+
+```{r topEmployers}
+# the top employers offering computer occupation and analysts jobs
+topEmployers <- h1bAppln %>%
+  filter(SOC_NAME=="COMPUTER OCCUPATION" | SOC_NAME=="ANALYSTS") %>%
+  group_by(EMPLOYER_NAME) %>%
+  summarize(frequency=n()) %>%
+  arrange(desc(frequency)) %>%
+  top_n(10)
+
+employerOcc <- h1bAppln %>%
+  filter(EMPLOYER_NAME %in% topEmployers$EMPLOYER_NAME & 
+           (SOC_NAME=="COMPUTER OCCUPATION" | SOC_NAME=="ANALYSTS"))
+
+(ggplot(data = employerOcc) +
+    geom_bar(mapping = aes(x=EMPLOYER_NAME, 
+                       fill=SOC_NAME), position = "dodge") +
+    coord_flip() + 
+    xlab("Employer") + 
+    ylab("Frequency"))
+
+```
+
+
+# CONCLUSION
+
+In this document, I have made the best use of H1B application data showing various visual explorations using the ggplot2 library. These explorations would be useful for those filing h1b applications and also the current applicants, as it gives us an overall idea of which states have more acceptance rates, the most demanding jobs, and the top employers sponsoring H1B visas for the non-immigrants. To conclude, I found that California is one of the states that has the top-notch tech companies and hence they hire the most. I also could see that Computer Occupation and Analysts have the best average salary. The H1b acceptance rate is high in NY but the number of applications is the highest in California. Similarly, I could also see that California and Washington have the highest paying jobs followed by NY. On the other hand, as the world is turning out to be digital, the most demanding job has become computer software. I feel this trend is likely to be seen in the following years as well with the other jobs been replaced by Computer occupation.
+
