@@ -222,7 +222,7 @@ library(ggmap)
 Registering with Google API key
 
 ```{r registerMap}
-key <- "AIzaSyCJkUzo4cb-Wwanp2KqlxfiK0nVpSZYDGM"
+key <- ""
 register_google(key=key)
 ```
 
